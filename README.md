@@ -88,3 +88,42 @@ stream = (spark.readStream
 
 # Trigger(availableNow=True) processes a batch and then shuts down to save money
 stream.writeStream.trigger(availableNow=True).toTable("fraud_lake.bronze.transactions")
+```
+### The "Merge" Logic (Gold Upsert)
+This handles updates. If a transaction changes (e.g., marked as fraud later), we update it. If it's new, we insert it.
+
+```python
+target.alias("t").merge(
+    source.alias("s"),
+    "t.transaction_id = s.transaction_id" # Match on ID
+).whenMatchedUpdate(
+    set = {"fraud_flag": col("s.fraud_flag")} # Update if changed
+).whenNotMatchedInsertAll() # Insert if new
+.execute()
+```
+## 5. Challenges & Solutions
+
+| Challenge | Solution |
+| :--- | :--- |
+| **Schema Drift:** The source system kept adding new columns (e.g., `promo_code`) unexpectedly. | Enabled `.option("mergeSchema", "true")` in Auto Loader, allowing the database to adapt automatically without crashing. |
+| **Duplicate Data:** The source sent the same file twice by accident. | Implemented `dropDuplicates(["transaction_id"])` in the Silver layer to guarantee uniqueness. |
+| **Slow Queries:** The dashboard became slow when the dataset grew. | Created a **Materialized View** (`bi_daily_sales_summary`) that pre-calculates the totals, allowing Power BI to read 300 rows instead of 3 million. |
+
+---
+
+## 6. How to Run This Project
+
+1.  **Prerequisites:**
+    * Access to a **Databricks Workspace**.
+    * Access to an **ADLS Gen2** container (or DBFS).
+
+2.  **Upload Data:**
+    * Place the raw CSV files into the ADLS container path: `/landing/incoming_data`.
+
+3.  **Run the Orchestrator:**
+    * Open the notebook `00_Master_Pipeline_Orchestrator`.
+    * Click **"Run All"** to trigger the end-to-end pipeline.
+
+4.  **View Results:**
+    * **Fraud Alerts:** Query the table `fraud_lake.gold.suspicious_activity_report` to see flagged transactions.
+    * **Dashboard:** Connect Power BI to `fraud_lake.gold.bi_daily_sales_summary` to visualize the metrics.
